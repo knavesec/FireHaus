@@ -136,6 +136,8 @@ def okta_authenticate(username, password, url):
 
     global results, lockout_counter, useragents
 
+    password = "".join(random.choice("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(12))
+
     body = {
         "username":username,
         "options": {
@@ -150,15 +152,15 @@ def okta_authenticate(username, password, url):
     trace_id = generate_trace_id()
 
     headers = {
-        "Accept":"application/json",
+        "Accept": "application/json",
         "X-My-X-Forwarded-For" : spoofed_ip,
         "x-amzn-apigateway-api-id" : amazon_id,
-        "X-Amzn-Trace-Id" : trace_id,
-        "X-Requested-With":"XMLHttpRequest",
-        "X-Okta-User-Agent-Extended":"okta-signin-widget-2.12.0",
-        "Accept-Encoding":"gzip, deflate",
-        "Accept-Language":"en",
-        "Content-Type":"application/json"
+        "X-My-X-Amzn-Trace-Id" : trace_id,
+        "X-Requested-With": "XMLHttpRequest",
+        "X-Okta-User-Agent-Extended": "okta-signin-widget-2.12.0",
+        "Accept-Encoding": "gzip, deflate",
+        "Accept-Language": "en",
+        "Content-Type": "application/json"
     }
 
     if useragents != []:

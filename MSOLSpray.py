@@ -177,7 +177,7 @@ def msol_authenticate(username, password, url, verbose):
         'Content-Type': 'application/x-www-form-urlencoded',
         "X-My-X-Forwarded-For" : spoofed_ip,
         "x-amzn-apigateway-api-id" : amazon_id,
-        "X-Amzn-Trace-Id" : trace_id
+        "X-My-X-Amzn-Trace-Id" : trace_id
     }
 
     if useragents != []:
