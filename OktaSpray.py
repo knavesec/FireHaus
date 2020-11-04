@@ -136,8 +136,6 @@ def okta_authenticate(username, password, url):
 
     global results, lockout_counter, useragents
 
-    password = "".join(random.choice("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ") for _ in range(12))
-
     body = {
         "username":username,
         "options": {
